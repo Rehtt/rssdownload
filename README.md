@@ -23,7 +23,58 @@ aria2。订阅、下载进度和异常处理都可以在浏览器中完成，适
 - **本地保存数据**：配置、订阅和历史记录均保存在自己的数据目录中，方便迁移
   与备份。
 
-## 快速开始
+## Docker Compose 部署
+
+推荐在 Linux 主机上使用 Docker Engine 和 Docker Compose v2 部署。Compose 会
+同时启动 RSSDownload 和 `superng6/aria2:a2b-latest`：
+
+```bash
+cp .env.example .env
+```
+
+编辑 `.env`，至少填写两个不同的强密码：
+
+```dotenv
+RSSDOWNLOAD_ADMIN_PASSWORD=replace-with-a-strong-admin-password
+ARIA2_RPC_SECRET=replace-with-a-different-aria2-secret
+```
+
+如果希望下载文件由当前宿主机用户管理，同时把 `.env` 中的 `PUID` 和 `PGID`
+分别改为 `id -u`、`id -g` 的输出。然后启动服务：
+
+```bash
+mkdir -p data/aria2 downloads
+docker compose up -d
+```
+
+打开 <http://127.0.0.1:8080>，登录后进入“系统设置”并填写：
+
+- aria2 JSON-RPC 地址：`http://aria2:6800/jsonrpc`
+- aria2 RPC Secret：`.env` 中的 `ARIA2_RPC_SECRET`
+- 默认下载目录：`/downloads`
+
+aria2 RPC 端口只对 Compose 内部网络开放；RSSDownload Web 端口和 aria2 BT
+TCP/UDP 端口可以通过 `.env` 调整。A2B 模式需要 `NET_ADMIN` 能力和只读的
+`/lib/modules` 挂载，因此该 Compose 配置面向 Linux 主机，不适用于 rootless
+Docker 或 Docker Desktop。
+
+数据默认保存在以下位置：
+
+- RSSDownload 数据库：Docker 命名卷 `rssdownload-data`
+- aria2 配置：`./data/aria2`
+- 下载文件：`./downloads`
+
+更新稳定版镜像并重建容器：
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+停止 RSSDownload 后，可以使用标准 Docker volume 工具备份或恢复
+`rssdownload-data`；aria2 配置和下载文件直接备份对应的宿主机目录即可。
+
+## 从源码运行
 
 ### 1. 构建程序
 
@@ -145,3 +196,19 @@ make dev-web
 ```
 
 前端开发服务默认地址为 <http://127.0.0.1:5173>。
+
+### 本地构建容器镜像
+
+```bash
+docker build \
+  --build-arg VERSION=dev \
+  --build-arg COMMIT="$(git rev-parse HEAD)" \
+  --build-arg BUILD_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+  -t rssdownload:dev .
+```
+
+正式版本会在推送合法的 `v*` 标签时自动构建 `linux/amd64` 和 `linux/arm64`
+镜像，并发布到 `ghcr.io/rehtt/rssdownload`。稳定版本同时维护语义化版本标签和
+`latest`；预发布版本不会覆盖 `latest`。GHCR package 首次创建时默认为私有，
+维护者需要在 GitHub 的 Package settings 中将其可见性改为 Public，Compose
+才能在未登录 GHCR 的主机上直接拉取。

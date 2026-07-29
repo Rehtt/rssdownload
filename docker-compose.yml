@@ -1,0 +1,52 @@
+services:
+  rssdownload:
+    image: ghcr.io/rehtt/rssdownload:latest
+    depends_on:
+      aria2:
+        condition: service_started
+    environment:
+      RSSDOWNLOAD_LISTEN: "0.0.0.0:8080"
+      RSSDOWNLOAD_DATA_DIR: "/data"
+      RSSDOWNLOAD_ADMIN_USERNAME: "${RSSDOWNLOAD_ADMIN_USERNAME:-admin}"
+      RSSDOWNLOAD_ADMIN_PASSWORD: "${RSSDOWNLOAD_ADMIN_PASSWORD:?set RSSDOWNLOAD_ADMIN_PASSWORD in .env}"
+    ports:
+      - "${RSSDOWNLOAD_PORT:-8080}:8080"
+    volumes:
+      - rssdownload-data:/data
+    restart: unless-stopped
+    stop_grace_period: 20s
+
+  aria2:
+    image: superng6/aria2:a2b-latest
+    cap_add:
+      - NET_ADMIN
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      TZ: "${TZ:-Asia/Shanghai}"
+      SECRET: "${ARIA2_RPC_SECRET:?set ARIA2_RPC_SECRET in .env}"
+      CACHE: "${ARIA2_CACHE:-512M}"
+      PORT: "6800"
+      BTPORT: "${ARIA2_BT_PORT:-6881}"
+      WEBUI: "false"
+      UT: "true"
+      RUT: "true"
+      QUIET: "true"
+      SMD: "true"
+      FA: "${ARIA2_FILE_ALLOCATION:-falloc}"
+      A2B: "true"
+      A2B_DISABLE_LOG: "${ARIA2_A2B_DISABLE_LOG:-true}"
+    expose:
+      - "6800"
+    ports:
+      - "${ARIA2_BT_PORT:-6881}:${ARIA2_BT_PORT:-6881}/tcp"
+      - "${ARIA2_BT_PORT:-6881}:${ARIA2_BT_PORT:-6881}/udp"
+    volumes:
+      - ./data/aria2:/config
+      - ./downloads:/downloads
+      - /lib/modules:/lib/modules:ro
+    restart: unless-stopped
+
+volumes:
+  rssdownload-data:
+    name: rssdownload-data

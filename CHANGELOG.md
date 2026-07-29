@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 新增 Dockerfile、包含 aria2 的 Docker Compose 部署示例，以及向 GHCR 发布多架构镜像的自动化流程。
+
 ## v0.1.0
 
 - 支持订阅 Mikan MyBangumi RSS、定时发现新条目，并通过安全基线避免首次同步误下载历史内容。
