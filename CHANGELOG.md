@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.1.1
 
+- 修复 aria2 未知 GID 报错识别与真实文案不匹配的问题，此前新任务始终无法提交给 aria2。
+- 新增 `RSSDOWNLOAD_TRUSTED_PROXIES` 配置：仅信任所配置反向代理的 `X-Forwarded-*` 请求头，反代部署下登录限流按真实客户端 IP 计数。
 - 新增 Dockerfile、包含 aria2 的 Docker Compose 部署示例，以及向 GHCR 发布多架构镜像的自动化流程。
 
 ## v0.1.0
