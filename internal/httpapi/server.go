@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -31,13 +32,14 @@ const (
 )
 
 type Server struct {
-	store        *store.Store
-	auth         *auth.Service
-	app          *app.Service
-	logger       *slog.Logger
-	cookieSecure bool
-	handler      http.Handler
-	limiter      *loginLimiter
+	store          *store.Store
+	auth           *auth.Service
+	app            *app.Service
+	logger         *slog.Logger
+	cookieSecure   bool
+	trustedProxies []netip.Prefix
+	handler        http.Handler
+	limiter        *loginLimiter
 }
 
 type contextKey string
@@ -53,17 +55,19 @@ func New(
 	appService *app.Service,
 	logger *slog.Logger,
 	cookieSecure bool,
+	trustedProxies []netip.Prefix,
 ) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	server := &Server{
-		store:        store,
-		auth:         authService,
-		app:          appService,
-		logger:       logger,
-		cookieSecure: cookieSecure,
-		limiter:      newLoginLimiter(),
+		store:          store,
+		auth:           authService,
+		app:            appService,
+		logger:         logger,
+		cookieSecure:   cookieSecure,
+		trustedProxies: trustedProxies,
+		limiter:        newLoginLimiter(),
 	}
 	server.handler = server.routes()
 	return server
@@ -113,11 +117,11 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	if !validSameOrigin(r) {
+	if !s.validSameOrigin(r) {
 		writeError(w, http.StatusForbidden, "invalid_origin", "请求来源不受信任")
 		return
 	}
-	ip := clientIP(r)
+	ip := s.clientIP(r)
 	if !s.limiter.Allow(ip) {
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "登录尝试过于频繁，请稍后再试")
 		return
@@ -588,7 +592,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			return
 		}
 		if isMutation(r.Method) {
-			if !validSameOrigin(r) {
+			if !s.validSameOrigin(r) {
 				writeError(w, http.StatusForbidden, "invalid_origin", "请求来源不受信任")
 				return
 			}
@@ -722,7 +726,7 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	})
 }
 
-func validSameOrigin(r *http.Request) bool {
+func (s *Server) validSameOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		// Non-browser clients and same-origin form-free requests often omit Origin.
@@ -733,18 +737,84 @@ func validSameOrigin(r *http.Request) bool {
 		return false
 	}
 	host := r.Host
-	if forwarded := r.Header.Get("X-Forwarded-Host"); forwarded != "" {
+	if forwarded := r.Header.Get("X-Forwarded-Host"); forwarded != "" && s.fromTrustedProxy(r) {
 		host = strings.TrimSpace(strings.Split(forwarded, ",")[0])
 	}
 	return strings.EqualFold(parsed.Host, host)
 }
 
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
-		return host
+// clientIP returns the address used to rate-limit login attempts. Forwarding
+// headers are only honored when the direct peer is a configured trusted
+// proxy; otherwise anyone could spoof X-Forwarded-For to dodge the limiter.
+func (s *Server) clientIP(r *http.Request) string {
+	peer, ok := peerAddr(r)
+	if !ok {
+		return r.RemoteAddr
 	}
-	return r.RemoteAddr
+	if !s.isTrustedProxy(peer) {
+		return peer.String()
+	}
+	entries := forwardedForEntries(r)
+	// Walk right to left: the first hop that is not one of our proxies is
+	// the client address as seen by the nearest trusted proxy.
+	for index := len(entries) - 1; index >= 0; index-- {
+		addr, ok := parseForwardedAddr(entries[index])
+		if !ok {
+			break
+		}
+		if !s.isTrustedProxy(addr) {
+			return addr.String()
+		}
+	}
+	return peer.String()
+}
+
+func (s *Server) fromTrustedProxy(r *http.Request) bool {
+	peer, ok := peerAddr(r)
+	return ok && s.isTrustedProxy(peer)
+}
+
+func (s *Server) isTrustedProxy(addr netip.Addr) bool {
+	for _, prefix := range s.trustedProxies {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+func peerAddr(r *http.Request) (netip.Addr, bool) {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return addr.Unmap(), true
+}
+
+func forwardedForEntries(r *http.Request) []string {
+	var entries []string
+	for _, header := range r.Header.Values("X-Forwarded-For") {
+		for _, entry := range strings.Split(header, ",") {
+			if entry = strings.TrimSpace(entry); entry != "" {
+				entries = append(entries, entry)
+			}
+		}
+	}
+	return entries
+}
+
+func parseForwardedAddr(entry string) (netip.Addr, bool) {
+	if addr, err := netip.ParseAddr(entry); err == nil {
+		return addr.Unmap(), true
+	}
+	if addrPort, err := netip.ParseAddrPort(entry); err == nil {
+		return addrPort.Addr().Unmap(), true
+	}
+	return netip.Addr{}, false
 }
 
 func isMutation(method string) bool {

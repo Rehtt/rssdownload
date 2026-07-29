@@ -148,9 +148,10 @@ RSSDOWNLOAD_ADMIN_PASSWORD='change-me-now' ./dist/rssdownload
 | `RSSDOWNLOAD_LISTEN` | `127.0.0.1:8080` | Web 服务监听地址 |
 | `RSSDOWNLOAD_DATA_DIR` | `./data` | 配置、订阅和历史记录的数据目录 |
 | `RSSDOWNLOAD_COOKIE_SECURE` | `false` | 使用 HTTPS 时设为 `true` |
+| `RSSDOWNLOAD_TRUSTED_PROXIES` | 无 | 受信任的反向代理 IP 或 CIDR，逗号分隔 |
 
-监听地址和数据目录也可以通过 `--listen`、`--data-dir` 参数指定，命令行参数
-优先于环境变量。
+监听地址等选项也可以通过 `--listen`、`--data-dir`、`--trusted-proxies` 参数
+指定，命令行参数优先于环境变量。
 
 ### 忘记管理员密码
 
@@ -175,6 +176,11 @@ RSSDOWNLOAD_ADMIN_PASSWORD='new-password' \
 RSSDownload 默认只允许本机访问。如果需要通过局域网或公网使用，建议放在 HTTPS
 反向代理之后，并设置 `RSSDOWNLOAD_COOKIE_SECURE=true`。不要将未加密、无访问
 控制的管理页面直接暴露到公网。
+
+使用反向代理时，请把 `RSSDOWNLOAD_TRUSTED_PROXIES` 设置为代理的 IP 或网段
+（例如 `127.0.0.1,::1` 或 `172.16.0.0/12`），登录限流才能按真实客户端 IP
+计数，而不是把所有访客都算在代理地址上。未配置时会忽略所有
+`X-Forwarded-*` 请求头。
 
 ## 当前边界
 

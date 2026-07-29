@@ -227,6 +227,10 @@ func IsGIDNotFound(err error) bool {
 		return false
 	}
 	message := strings.ToLower(rpcErr.Message)
+	// aria2 reports unknown GIDs as "No such download for GID#xxxx".
+	if strings.Contains(message, "no such download") {
+		return true
+	}
 	return strings.Contains(message, "gid") &&
 		(strings.Contains(message, "not found") || strings.Contains(message, "not exist"))
 }

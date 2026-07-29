@@ -4,8 +4,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -14,11 +16,12 @@ const (
 )
 
 type Config struct {
-	Listen        string
-	DataDir       string
-	CookieSecure  bool
-	AdminUsername string
-	AdminPassword string
+	Listen         string
+	DataDir        string
+	CookieSecure   bool
+	AdminUsername  string
+	AdminPassword  string
+	TrustedProxies []netip.Prefix
 }
 
 func Load(args []string) (Config, error) {
@@ -29,11 +32,18 @@ func Load(args []string) (Config, error) {
 		AdminUsername: envOr("RSSDOWNLOAD_ADMIN_USERNAME", "admin"),
 		AdminPassword: os.Getenv("RSSDOWNLOAD_ADMIN_PASSWORD"),
 	}
+	trustedProxies := os.Getenv("RSSDOWNLOAD_TRUSTED_PROXIES")
 
 	fs := flag.NewFlagSet("rssdownload", flag.ContinueOnError)
 	fs.StringVar(&cfg.Listen, "listen", cfg.Listen, "HTTP listen address")
 	fs.StringVar(&cfg.DataDir, "data-dir", cfg.DataDir, "directory for SQLite data")
 	fs.BoolVar(&cfg.CookieSecure, "cookie-secure", cfg.CookieSecure, "set Secure on the session cookie")
+	fs.StringVar(
+		&trustedProxies,
+		"trusted-proxies",
+		trustedProxies,
+		"comma-separated proxy IPs or CIDRs whose X-Forwarded-* headers are trusted",
+	)
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -49,7 +59,32 @@ func Load(args []string) (Config, error) {
 	if cfg.AdminUsername == "" {
 		return Config{}, errors.New("admin username must not be empty")
 	}
+	parsed, err := parseTrustedProxies(trustedProxies)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.TrustedProxies = parsed
 	return cfg, nil
+}
+
+func parseTrustedProxies(value string) ([]netip.Prefix, error) {
+	var prefixes []netip.Prefix
+	for _, entry := range strings.Split(value, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if prefix, err := netip.ParsePrefix(entry); err == nil {
+			prefixes = append(prefixes, prefix.Masked())
+			continue
+		}
+		addr, err := netip.ParseAddr(entry)
+		if err != nil {
+			return nil, fmt.Errorf("invalid trusted proxy %q: expected an IP or CIDR", entry)
+		}
+		prefixes = append(prefixes, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+	return prefixes, nil
 }
 
 func envOr(name, fallback string) string {

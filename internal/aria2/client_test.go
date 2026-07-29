@@ -88,7 +88,7 @@ func TestRPCError(t *testing.T) {
 			"id":      request.ID,
 			"error": map[string]any{
 				"code":    1,
-				"message": "GID 0123 not found",
+				"message": "No such download for GID#0123456789abcdef",
 			},
 		})
 		return &http.Response{

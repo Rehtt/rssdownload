@@ -222,7 +222,7 @@ func (f *fakeAria) AddTorrent(_ context.Context, _ []byte, gid, directory string
 }
 
 func (f *fakeAria) TellStatus(context.Context, string) (aria2.Status, error) {
-	return aria2.Status{}, &aria2.RPCError{Code: 1, Message: "GID not found"}
+	return aria2.Status{}, &aria2.RPCError{Code: 1, Message: "No such download for GID#0123456789abcdef"}
 }
 
 func (f *fakeAria) Pause(context.Context, string) error   { return nil }

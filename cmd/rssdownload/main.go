@@ -83,6 +83,7 @@ func run(args []string) error {
 		appService,
 		logger,
 		cfg.CookieSecure,
+		cfg.TrustedProxies,
 	)
 	httpServer := &http.Server{
 		Addr:              cfg.Listen,

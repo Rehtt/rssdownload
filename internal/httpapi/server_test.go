@@ -30,7 +30,7 @@ func newTestServer(t *testing.T) http.Handler {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	appService := app.New(dataStore, logger)
-	return New(dataStore, authService, appService, logger, false).Handler()
+	return New(dataStore, authService, appService, logger, false, nil).Handler()
 }
 
 func TestAuthenticationAndCSRF(t *testing.T) {
