@@ -142,9 +142,11 @@ func TestRPCError(t *testing.T) {
 				"message": "No such download for GID#0123456789abcdef",
 			},
 		})
+		// aria2 pairs RPC error bodies with HTTP 400 (see
+		// HttpServerBodyCommand.cc), so mirror the real behaviour here.
 		return &http.Response{
-			StatusCode: http.StatusOK,
-			Status:     "200 OK",
+			StatusCode: http.StatusBadRequest,
+			Status:     "400 Bad Request",
 			Header:     make(http.Header),
 			Body:       io.NopCloser(bytes.NewReader(body)),
 		}, nil

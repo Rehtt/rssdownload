@@ -198,18 +198,22 @@ func (c *Client) call(ctx context.Context, method string, params []any, result a
 	if len(responseBody) > maxRPCResponse {
 		return errors.New("aria2 response is too large")
 	}
+	// aria2 reports JSON-RPC failures (e.g. "No such download for GID#x") with
+	// non-2xx HTTP status codes, so extract the RPC error from the body before
+	// falling back to a generic HTTP status error.
+	var decoded rpcResponse
+	decodeErr := json.Unmarshal(responseBody, &decoded)
+	if decodeErr == nil && decoded.Error != nil {
+		return decoded.Error
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("aria2 returned HTTP %s", response.Status)
 	}
-	var decoded rpcResponse
-	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return fmt.Errorf("decode aria2 response: %w", err)
+	if decodeErr != nil {
+		return fmt.Errorf("decode aria2 response: %w", decodeErr)
 	}
 	if decoded.ID != "" && decoded.ID != id {
 		return errors.New("aria2 returned a mismatched request id")
-	}
-	if decoded.Error != nil {
-		return decoded.Error
 	}
 	if result == nil {
 		return nil
