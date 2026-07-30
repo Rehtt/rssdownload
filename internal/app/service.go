@@ -35,6 +35,7 @@ type AriaClient interface {
 		config aria2.AddTorrentOptions,
 	) (string, error)
 	TellStatus(ctx context.Context, gid string) (aria2.Status, error)
+	TellStatuses(ctx context.Context, gids []string) ([]aria2.StatusResult, error)
 	Pause(ctx context.Context, gid string) error
 	Unpause(ctx context.Context, gid string) error
 	RemoveDownloadResult(ctx context.Context, gid string) error
@@ -56,6 +57,16 @@ type Service struct {
 	cancel          context.CancelFunc
 	wg              sync.WaitGroup
 	statusSemaphore chan struct{}
+
+	// Outbound HTTP clients are cached per proxy configuration so repeated
+	// feed polls and torrent fetches reuse pooled connections instead of
+	// building a fresh transport (and connection pool) on every call.
+	clientMu         sync.Mutex
+	torrentKey       proxyconfig.Config
+	torrentTransport *http.Transport
+	torrentClient    *http.Client
+	feedKey          proxyconfig.Config
+	feedClient       FeedFetcher
 }
 
 func New(store *store.Store, logger *slog.Logger) *Service {
@@ -139,11 +150,10 @@ func (s *Service) TestAria2(ctx context.Context, settings domain.Settings) (aria
 }
 
 func (s *Service) PauseDownload(ctx context.Context, id int64) error {
-	download, settings, client, err := s.downloadClient(ctx, id)
+	download, client, err := s.downloadClient(ctx, id)
 	if err != nil {
 		return err
 	}
-	_ = settings
 	if err := client.Pause(ctx, download.Aria2GID); err != nil {
 		return err
 	}
@@ -158,11 +168,10 @@ func (s *Service) PauseDownload(ctx context.Context, id int64) error {
 }
 
 func (s *Service) ResumeDownload(ctx context.Context, id int64) error {
-	download, settings, client, err := s.downloadClient(ctx, id)
+	download, client, err := s.downloadClient(ctx, id)
 	if err != nil {
 		return err
 	}
-	_ = settings
 	if err := client.Unpause(ctx, download.Aria2GID); err != nil {
 		return err
 	}
@@ -215,18 +224,15 @@ func (s *Service) syncSubscription(ctx context.Context, id int64) error {
 		return err
 	}
 	interval := time.Duration(settings.PollIntervalMinutes) * time.Minute
-	fetcher := s.feeds
-	if fetcher == nil {
-		fetcher, err = feed.NewClientWithProxy(proxySettings(settings))
-		if err != nil {
-			retryAt := time.Now().UTC().Add(minDuration(interval, time.Minute))
-			_ = s.store.MarkSyncError(ctx, id, err.Error(), retryAt)
-			return err
-		}
+	fetcher, err := s.feedFetcherFor(settings)
+	if err != nil {
+		retryAt := time.Now().UTC().Add(min(interval, time.Minute))
+		_ = s.store.MarkSyncError(ctx, id, err.Error(), retryAt)
+		return err
 	}
 	result, err := fetcher.Fetch(ctx, subscription.URL, subscription.ETag, subscription.LastModified)
 	if err != nil {
-		retryAt := time.Now().UTC().Add(minDuration(interval, time.Minute))
+		retryAt := time.Now().UTC().Add(min(interval, time.Minute))
 		_ = s.store.MarkSyncError(ctx, id, err.Error(), retryAt)
 		return err
 	}
@@ -297,6 +303,9 @@ func (s *Service) scheduleDownloads() {
 }
 
 func (s *Service) submitDownload(ctx context.Context, download domain.Download) {
+	// Settings are read after the semaphore slot is acquired: submissions
+	// have lasting side effects, so a task that waited behind slow peers
+	// must not go out with a configuration captured before the wait.
 	settings, err := s.store.Settings(ctx)
 	if err != nil {
 		s.retryDownload(ctx, download, err, false)
@@ -397,47 +406,69 @@ func (s *Service) trackDownloads() {
 		s.logger.Warn("create aria2 client", "error", err)
 		return
 	}
+	tracked := make([]domain.Download, 0, len(downloads))
 	for _, download := range downloads {
-		if !s.beginProcessing(download.ID) {
-			continue
+		if s.beginProcessing(download.ID) {
+			tracked = append(tracked, download)
 		}
-		s.wg.Add(1)
-		go func(download domain.Download) {
-			defer s.wg.Done()
-			defer s.endProcessing(download.ID)
-			select {
-			case s.statusSemaphore <- struct{}{}:
-				defer func() { <-s.statusSemaphore }()
-			case <-s.ctx.Done():
-				return
+	}
+	if len(tracked) == 0 {
+		return
+	}
+	defer func() {
+		for _, download := range tracked {
+			s.endProcessing(download.ID)
+		}
+	}()
+	gids := make([]string, len(tracked))
+	for index, download := range tracked {
+		gids[index] = download.Aria2GID
+	}
+	results, err := client.TellStatuses(s.ctx, gids)
+	if err != nil {
+		for _, download := range tracked {
+			_ = s.store.MarkDownloadCheckError(s.ctx, download.ID, err.Error())
+		}
+		return
+	}
+	if len(results) != len(tracked) {
+		s.logger.Error(
+			"aria2 returned a mismatched status count",
+			"expected", len(tracked),
+			"got", len(results),
+		)
+		return
+	}
+	for index, download := range tracked {
+		s.applyTrackedStatus(download, results[index])
+	}
+}
+
+func (s *Service) applyTrackedStatus(download domain.Download, result aria2.StatusResult) {
+	if result.Err != nil {
+		if aria2.IsGIDNotFound(result.Err) {
+			if download.Status == domain.DownloadSubmitting {
+				_, _ = s.store.ResetDownload(s.ctx, download.ID)
+			} else {
+				_ = s.store.UpdateDownloadStatus(
+					s.ctx,
+					download.ID,
+					domain.DownloadUnknown,
+					download.TotalLength,
+					download.CompletedLength,
+					"aria2 no longer knows this GID",
+				)
 			}
-			status, err := client.TellStatus(s.ctx, download.Aria2GID)
-			if err != nil {
-				if aria2.IsGIDNotFound(err) {
-					if download.Status == domain.DownloadSubmitting {
-						_, _ = s.store.ResetDownload(s.ctx, download.ID)
-					} else {
-						_ = s.store.UpdateDownloadStatus(
-							s.ctx,
-							download.ID,
-							domain.DownloadUnknown,
-							download.TotalLength,
-							download.CompletedLength,
-							"aria2 no longer knows this GID",
-						)
-					}
-				} else {
-					_ = s.store.MarkDownloadCheckError(s.ctx, download.ID, err.Error())
-				}
-				return
-			}
-			mapped, total, completed, message := aria2.MapStatus(status)
-			if err := s.store.UpdateDownloadStatus(
-				s.ctx, download.ID, mapped, total, completed, message,
-			); err != nil {
-				s.logger.Error("update aria2 status", "download_id", download.ID, "error", err)
-			}
-		}(download)
+		} else {
+			_ = s.store.MarkDownloadCheckError(s.ctx, download.ID, result.Err.Error())
+		}
+		return
+	}
+	mapped, total, completed, message := aria2.MapStatus(result.Status)
+	if err := s.store.UpdateDownloadStatus(
+		s.ctx, download.ID, mapped, total, completed, message,
+	); err != nil {
+		s.logger.Error("update aria2 status", "download_id", download.ID, "error", err)
 	}
 }
 
@@ -472,23 +503,9 @@ func (s *Service) fetchTorrent(
 	}
 	request.Header.Set("Accept", "application/x-bittorrent, application/octet-stream;q=0.9")
 	request.Header.Set("User-Agent", "rssdownload/1.0")
-	client := s.httpClient
-	if client == nil {
-		transport, transportErr := proxyconfig.NewTransport(proxySettings(settings))
-		if transportErr != nil {
-			return nil, true, transportErr
-		}
-		client = &http.Client{
-			Transport: transport,
-			Timeout:   30 * time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 5 {
-					return errors.New("too many redirects")
-				}
-				req.Header.Set("User-Agent", "rssdownload/1.0")
-				return nil
-			},
-		}
+	client, err := s.torrentClientFor(settings)
+	if err != nil {
+		return nil, true, err
 	}
 	response, err := client.Do(request)
 	if err != nil {
@@ -522,6 +539,61 @@ func proxySettings(settings domain.Settings) proxyconfig.Config {
 	}
 }
 
+func (s *Service) torrentClientFor(settings domain.Settings) (*http.Client, error) {
+	if s.httpClient != nil {
+		return s.httpClient, nil
+	}
+	key := proxySettings(settings)
+	s.clientMu.Lock()
+	defer s.clientMu.Unlock()
+	if s.torrentClient != nil && key == s.torrentKey {
+		return s.torrentClient, nil
+	}
+	transport, err := proxyconfig.NewTransport(key)
+	if err != nil {
+		return nil, err
+	}
+	if s.torrentTransport != nil {
+		s.torrentTransport.CloseIdleConnections()
+	}
+	s.torrentKey = key
+	s.torrentTransport = transport
+	s.torrentClient = &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return errors.New("too many redirects")
+			}
+			req.Header.Set("User-Agent", "rssdownload/1.0")
+			return nil
+		},
+	}
+	return s.torrentClient, nil
+}
+
+func (s *Service) feedFetcherFor(settings domain.Settings) (FeedFetcher, error) {
+	if s.feeds != nil {
+		return s.feeds, nil
+	}
+	key := proxySettings(settings)
+	s.clientMu.Lock()
+	defer s.clientMu.Unlock()
+	if s.feedClient != nil && key == s.feedKey {
+		return s.feedClient, nil
+	}
+	client, err := feed.NewClientWithProxy(key)
+	if err != nil {
+		return nil, err
+	}
+	if old, ok := s.feedClient.(interface{ CloseIdleConnections() }); ok {
+		old.CloseIdleConnections()
+	}
+	s.feedKey = key
+	s.feedClient = client
+	return client, nil
+}
+
 func (s *Service) retryDownload(
 	ctx context.Context,
 	download domain.Download,
@@ -548,20 +620,20 @@ func (s *Service) retryDownload(
 func (s *Service) downloadClient(
 	ctx context.Context,
 	id int64,
-) (domain.Download, domain.Settings, AriaClient, error) {
+) (domain.Download, AriaClient, error) {
 	download, err := s.store.Download(ctx, id)
 	if err != nil {
-		return domain.Download{}, domain.Settings{}, nil, err
+		return domain.Download{}, nil, err
 	}
 	settings, err := s.store.Settings(ctx)
 	if err != nil {
-		return domain.Download{}, domain.Settings{}, nil, err
+		return domain.Download{}, nil, err
 	}
 	client, err := s.ariaFactory(settings.Aria2URL, settings.Aria2Secret)
 	if err != nil {
-		return domain.Download{}, domain.Settings{}, nil, err
+		return domain.Download{}, nil, err
 	}
-	return download, settings, client, nil
+	return download, client, nil
 }
 
 func (s *Service) beginSync(id int64) bool {
@@ -607,13 +679,6 @@ func retryDelay(retryCount int) time.Duration {
 	default:
 		return time.Hour
 	}
-}
-
-func minDuration(a, b time.Duration) time.Duration {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func isPermanentRPCError(err error) bool {

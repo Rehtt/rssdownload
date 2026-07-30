@@ -1,6 +1,7 @@
 package feed
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -66,6 +67,16 @@ func NewClientWithProxy(config proxyconfig.Config) (*Client, error) {
 
 func NewClientWithHTTP(client *http.Client) *Client {
 	return &Client{httpClient: client}
+}
+
+// CloseIdleConnections drops the keep-alive connections held by the
+// underlying transport, so a client that is being replaced (e.g. after a
+// proxy change) does not keep sockets open until the idle timeout.
+func (c *Client) CloseIdleConnections() {
+	type closeIdler interface{ CloseIdleConnections() }
+	if transport, ok := c.httpClient.Transport.(closeIdler); ok {
+		transport.CloseIdleConnections()
+	}
 }
 
 func ValidateMikanURL(rawURL string) error {
@@ -201,7 +212,7 @@ type rssTorrent struct {
 
 func Parse(data []byte) (string, []domain.ParsedItem, error) {
 	var document rssDocument
-	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	decoder := xml.NewDecoder(bytes.NewReader(data))
 	decoder.Strict = true
 	if err := decoder.Decode(&document); err != nil {
 		return "", nil, fmt.Errorf("parse Mikan RSS XML: %w", err)

@@ -243,6 +243,14 @@ func (f *fakeAria) TellStatus(context.Context, string) (aria2.Status, error) {
 	return aria2.Status{}, &aria2.RPCError{Code: 1, Message: "No such download for GID#0123456789abcdef"}
 }
 
+func (f *fakeAria) TellStatuses(_ context.Context, gids []string) ([]aria2.StatusResult, error) {
+	results := make([]aria2.StatusResult, len(gids))
+	for index, gid := range gids {
+		results[index].Err = &aria2.RPCError{Code: 1, Message: "No such download for GID#" + gid}
+	}
+	return results, nil
+}
+
 func (f *fakeAria) Pause(context.Context, string) error   { return nil }
 func (f *fakeAria) Unpause(context.Context, string) error { return nil }
 

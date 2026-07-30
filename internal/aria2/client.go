@@ -133,22 +133,91 @@ func finiteNonNegative(value float64) bool {
 	return value >= 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
+var statusKeys = []string{
+	"gid",
+	"status",
+	"totalLength",
+	"completedLength",
+	"downloadSpeed",
+	"errorCode",
+	"errorMessage",
+	"dir",
+}
+
 func (c *Client) TellStatus(ctx context.Context, gid string) (Status, error) {
-	keys := []string{
-		"gid",
-		"status",
-		"totalLength",
-		"completedLength",
-		"downloadSpeed",
-		"errorCode",
-		"errorMessage",
-		"dir",
-	}
 	var result Status
-	if err := c.call(ctx, "aria2.tellStatus", []any{gid, keys}, &result); err != nil {
+	if err := c.call(ctx, "aria2.tellStatus", []any{gid, statusKeys}, &result); err != nil {
 		return Status{}, err
 	}
 	return result, nil
+}
+
+// StatusResult carries the outcome of one GID inside a batched status query.
+type StatusResult struct {
+	Status Status
+	Err    error
+}
+
+// TellStatuses fetches the status of several GIDs in a single
+// system.multicall round trip. The returned slice matches the order of gids;
+// each entry holds either the decoded status or the per-GID RPC error.
+func (c *Client) TellStatuses(ctx context.Context, gids []string) ([]StatusResult, error) {
+	if len(gids) == 0 {
+		return nil, nil
+	}
+	// system.multicall does not accept the secret token at the top level;
+	// aria2 expects it as the first parameter of every nested call instead.
+	calls := make([]map[string]any, 0, len(gids))
+	for _, gid := range gids {
+		params := make([]any, 0, 3)
+		if c.secret != "" {
+			params = append(params, "token:"+c.secret)
+		}
+		params = append(params, gid, statusKeys)
+		calls = append(calls, map[string]any{
+			"methodName": "aria2.tellStatus",
+			"params":     params,
+		})
+	}
+	var raw []json.RawMessage
+	if err := c.rawCall(ctx, "system.multicall", []any{calls}, &raw); err != nil {
+		return nil, err
+	}
+	if len(raw) != len(gids) {
+		return nil, fmt.Errorf(
+			"aria2 multicall returned %d results for %d calls",
+			len(raw),
+			len(gids),
+		)
+	}
+	results := make([]StatusResult, len(gids))
+	for index, entry := range raw {
+		results[index] = decodeMulticallStatus(entry)
+	}
+	return results, nil
+}
+
+// decodeMulticallStatus unwraps one system.multicall entry: successful nested
+// calls arrive as a one-element array, failed ones as a fault object with
+// code and message.
+func decodeMulticallStatus(entry json.RawMessage) StatusResult {
+	var wrapped []json.RawMessage
+	if err := json.Unmarshal(entry, &wrapped); err == nil {
+		if len(wrapped) != 1 {
+			return StatusResult{Err: errors.New("aria2 multicall entry has an unexpected shape")}
+		}
+		var status Status
+		if err := json.Unmarshal(wrapped[0], &status); err != nil {
+			return StatusResult{Err: fmt.Errorf("decode aria2 status: %w", err)}
+		}
+		return StatusResult{Status: status}
+	}
+	var fault RPCError
+	if err := json.Unmarshal(entry, &fault); err != nil ||
+		(fault.Code == 0 && fault.Message == "") {
+		return StatusResult{Err: errors.New("aria2 multicall entry has an unexpected shape")}
+	}
+	return StatusResult{Err: &fault}
 }
 
 func (c *Client) Pause(ctx context.Context, gid string) error {
@@ -175,6 +244,12 @@ func (c *Client) call(ctx context.Context, method string, params []any, result a
 	if c.secret != "" {
 		params = append([]any{"token:" + c.secret}, params...)
 	}
+	return c.rawCall(ctx, method, params, result)
+}
+
+// rawCall performs a JSON-RPC request with the parameters exactly as given,
+// without prepending the secret token.
+func (c *Client) rawCall(ctx context.Context, method string, params []any, result any) error {
 	id := strconv.FormatUint(c.requestID.Add(1), 10)
 	payload := rpcRequest{
 		JSONRPC: "2.0",

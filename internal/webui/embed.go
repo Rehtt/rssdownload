@@ -19,11 +19,31 @@ func Handler() http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	return &handler{fs: sub}
+	// Preload every asset once so serving a request is a map lookup instead
+	// of a fresh copy of the embedded file bytes.
+	files := make(map[string][]byte)
+	err = fs.WalkDir(sub, ".", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		data, err := fs.ReadFile(sub, name)
+		if err != nil {
+			return err
+		}
+		files[name] = data
+		return nil
+	})
+	if err != nil {
+		panic(err)
+	}
+	return &handler{files: files}
 }
 
 type handler struct {
-	fs fs.FS
+	files map[string][]byte
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -35,12 +55,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if requestPath == "" || requestPath == "." {
 		requestPath = "index.html"
 	}
-	data, err := fs.ReadFile(h.fs, requestPath)
-	if err != nil && !strings.Contains(path.Base(requestPath), ".") {
+	data, ok := h.files[requestPath]
+	if !ok && !strings.Contains(path.Base(requestPath), ".") {
 		requestPath = "index.html"
-		data, err = fs.ReadFile(h.fs, requestPath)
+		data, ok = h.files[requestPath]
 	}
-	if err != nil {
+	if !ok {
 		if requestPath == "index.html" {
 			http.Error(
 				w,

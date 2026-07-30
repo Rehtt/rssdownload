@@ -208,7 +208,7 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		if strings.Contains(err.Error(), "at least 8") {
+		if errors.Is(err, auth.ErrWeakPassword) {
 			writeError(w, http.StatusBadRequest, "weak_password", "新密码至少需要 8 个字符")
 			return
 		}
@@ -838,9 +838,10 @@ func redactTorrentURL(raw string) string {
 }
 
 type loginLimiter struct {
-	mu       sync.Mutex
-	attempts map[string][]time.Time
-	blocked  map[string]time.Time
+	mu        sync.Mutex
+	attempts  map[string][]time.Time
+	blocked   map[string]time.Time
+	lastSweep time.Time
 }
 
 func newLoginLimiter() *loginLimiter {
@@ -854,6 +855,7 @@ func (l *loginLimiter) Allow(ip string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
+	l.sweep(now)
 	if until, exists := l.blocked[ip]; exists {
 		if now.Before(until) {
 			return false
@@ -867,7 +869,11 @@ func (l *loginLimiter) Allow(ip string) bool {
 			recent = append(recent, attempt)
 		}
 	}
-	l.attempts[ip] = recent
+	if len(recent) == 0 {
+		delete(l.attempts, ip)
+	} else {
+		l.attempts[ip] = recent
+	}
 	return len(recent) < 5
 }
 
@@ -878,6 +884,33 @@ func (l *loginLimiter) Failed(ip string) {
 	l.attempts[ip] = append(l.attempts[ip], now)
 	if len(l.attempts[ip]) >= 5 {
 		l.blocked[ip] = now.Add(15 * time.Minute)
+	}
+}
+
+// sweep drops stale per-IP state so unauthenticated scans cannot grow the
+// maps without bound. The caller must hold l.mu.
+func (l *loginLimiter) sweep(now time.Time) {
+	if now.Sub(l.lastSweep) < 10*time.Minute {
+		return
+	}
+	l.lastSweep = now
+	cutoff := now.Add(-10 * time.Minute)
+	for ip, attempts := range l.attempts {
+		stale := true
+		for _, attempt := range attempts {
+			if attempt.After(cutoff) {
+				stale = false
+				break
+			}
+		}
+		if stale {
+			delete(l.attempts, ip)
+		}
+	}
+	for ip, until := range l.blocked {
+		if !now.Before(until) {
+			delete(l.blocked, ip)
+		}
 	}
 }
 

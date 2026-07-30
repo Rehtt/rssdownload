@@ -92,13 +92,16 @@ func (s *Service) Login(ctx context.Context, username, password string) (LoginRe
 		return LoginResult{}, err
 	}
 	expires := s.now().Add(sessionLifetime)
-	tokenHash := hashToken(token)
-	if err := s.store.CreateSession(ctx, admin.ID, tokenHash, csrf, expires); err != nil {
-		return LoginResult{}, err
-	}
-	session, err := s.store.SessionByTokenHash(ctx, tokenHash)
+	sessionID, err := s.store.CreateSession(ctx, admin.ID, hashToken(token), csrf, expires)
 	if err != nil {
 		return LoginResult{}, err
+	}
+	session := store.Session{
+		ID:        sessionID,
+		AdminID:   admin.ID,
+		Username:  admin.Username,
+		CSRFToken: csrf,
+		ExpiresAt: expires,
 	}
 	return LoginResult{Token: token, CSRFToken: csrf, Session: session}, nil
 }

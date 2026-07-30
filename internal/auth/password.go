@@ -19,9 +19,13 @@ const (
 	argonKeyLength   = 32
 )
 
+// ErrWeakPassword reports a password that does not satisfy the minimum
+// length requirement.
+var ErrWeakPassword = errors.New("password must contain at least 8 characters")
+
 func HashPassword(password string) (string, error) {
 	if len(password) < 8 {
-		return "", errors.New("password must contain at least 8 characters")
+		return "", ErrWeakPassword
 	}
 	salt := make([]byte, argonSaltLength)
 	if _, err := rand.Read(salt); err != nil {

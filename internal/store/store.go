@@ -133,7 +133,7 @@ func (s *Store) CreateSession(
 	tokenHash []byte,
 	csrfToken string,
 	expiresAt time.Time,
-) error {
+) (int64, error) {
 	now := s.now()
 	model := database.SessionModel{
 		AdminID:    adminID,
@@ -144,22 +144,23 @@ func (s *Store) CreateSession(
 		ExpiresAt:  expiresAt.UTC(),
 	}
 	if err := s.db.WithContext(ctx).Omit(clause.Associations).Create(&model).Error; err != nil {
-		return fmt.Errorf("create session: %w", err)
+		return 0, fmt.Errorf("create session: %w", err)
 	}
-	return nil
+	return model.ID, nil
 }
 
 func (s *Store) SessionByTokenHash(ctx context.Context, tokenHash []byte) (Session, error) {
 	var row struct {
-		ID        int64
-		AdminID   int64
-		Username  string
-		CSRFToken string
-		ExpiresAt time.Time
+		ID         int64
+		AdminID    int64
+		Username   string
+		CSRFToken  string
+		ExpiresAt  time.Time
+		LastSeenAt time.Time
 	}
 	err := s.db.WithContext(ctx).
 		Table("sessions AS s").
-		Select("s.id, s.admin_id, a.username, s.csrf_token, s.expires_at").
+		Select("s.id, s.admin_id, a.username, s.csrf_token, s.expires_at, s.last_seen_at").
 		Joins("JOIN admins a ON a.id = s.admin_id").
 		Where("s.token_hash = ?", tokenHash).
 		Take(&row).Error
@@ -173,11 +174,15 @@ func (s *Store) SessionByTokenHash(ctx context.Context, tokenHash []byte) (Sessi
 		_ = s.DeleteSession(ctx, tokenHash)
 		return Session{}, ErrNotFound
 	}
+	// Refresh last_seen_at at most every five minutes; deciding in Go keeps
+	// ordinary authenticated reads from issuing a write statement.
 	now := s.now()
-	_ = s.db.WithContext(ctx).
-		Model(&database.SessionModel{}).
-		Where("id = ? AND last_seen_at < ?", row.ID, now.Add(-5*time.Minute)).
-		Update("last_seen_at", now).Error
+	if row.LastSeenAt.Before(now.Add(-5 * time.Minute)) {
+		_ = s.db.WithContext(ctx).
+			Model(&database.SessionModel{}).
+			Where("id = ?", row.ID).
+			Update("last_seen_at", now).Error
+	}
 	return Session{
 		ID:        row.ID,
 		AdminID:   row.AdminID,
@@ -297,10 +302,6 @@ func (s *Store) UpdateSubscription(
 	id int64,
 	patch SubscriptionPatch,
 ) (domain.Subscription, error) {
-	current, err := s.Subscription(ctx, id)
-	if err != nil {
-		return domain.Subscription{}, err
-	}
 	updates := map[string]any{"updated_at": s.now()}
 	if patch.Name != nil {
 		updates["name"] = strings.TrimSpace(*patch.Name)
@@ -326,10 +327,14 @@ func (s *Store) UpdateSubscription(
 	}
 	result := s.db.WithContext(ctx).
 		Model(&database.SubscriptionModel{}).
-		Where("id = ?", current.ID).
+		Where("id = ?", id).
 		Updates(updates)
 	if result.Error != nil {
 		return domain.Subscription{}, fmt.Errorf("update subscription: %w", result.Error)
+	}
+	// updates always carries updated_at, so an existing row is always affected.
+	if result.RowsAffected == 0 {
+		return domain.Subscription{}, ErrNotFound
 	}
 	return s.Subscription(ctx, id)
 }
@@ -813,26 +818,26 @@ func (s *Store) Dashboard(ctx context.Context) (domain.Dashboard, error) {
 		Count(&result.RecognizedItems).Error; err != nil {
 		return domain.Dashboard{}, fmt.Errorf("count recognized items: %w", err)
 	}
-	if err := db.Model(&database.DownloadModel{}).
-		Where("status IN ?", []domain.DownloadStatus{
-			domain.DownloadQueued,
-			domain.DownloadSubmitting,
-			domain.DownloadWaiting,
-			domain.DownloadActive,
-			domain.DownloadPaused,
-		}).
-		Count(&result.ActiveDownloads).Error; err != nil {
-		return domain.Dashboard{}, fmt.Errorf("count active downloads: %w", err)
+	var downloadCounts []struct {
+		Status string
+		Count  int64
 	}
 	if err := db.Model(&database.DownloadModel{}).
-		Where("status = ?", domain.DownloadComplete).
-		Count(&result.Completed).Error; err != nil {
-		return domain.Dashboard{}, fmt.Errorf("count completed downloads: %w", err)
+		Select("status, COUNT(*) AS count").
+		Group("status").
+		Scan(&downloadCounts).Error; err != nil {
+		return domain.Dashboard{}, fmt.Errorf("count downloads: %w", err)
 	}
-	if err := db.Model(&database.DownloadModel{}).
-		Where("status IN ?", []domain.DownloadStatus{domain.DownloadError, domain.DownloadUnknown}).
-		Count(&result.Errors).Error; err != nil {
-		return domain.Dashboard{}, fmt.Errorf("count download errors: %w", err)
+	for _, entry := range downloadCounts {
+		switch domain.DownloadStatus(entry.Status) {
+		case domain.DownloadQueued, domain.DownloadSubmitting, domain.DownloadWaiting,
+			domain.DownloadActive, domain.DownloadPaused:
+			result.ActiveDownloads += entry.Count
+		case domain.DownloadComplete:
+			result.Completed += entry.Count
+		case domain.DownloadError, domain.DownloadUnknown:
+			result.Errors += entry.Count
+		}
 	}
 	var last struct {
 		LastSyncAt *time.Time
@@ -886,8 +891,7 @@ func ensureDownloadTx(
 
 func (s *Store) itemQuery(ctx context.Context, filter ItemFilter) *gorm.DB {
 	query := s.db.WithContext(ctx).
-		Model(&database.FeedItemModel{}).
-		Joins("LEFT JOIN downloads d ON d.id = feed_items.download_id")
+		Model(&database.FeedItemModel{})
 	if filter.SubscriptionID > 0 {
 		query = query.Where("feed_items.subscription_id = ?", filter.SubscriptionID)
 	}
@@ -898,7 +902,9 @@ func (s *Store) itemQuery(ctx context.Context, filter ItemFilter) *gorm.DB {
 		if filter.DownloadStatus == string(domain.DownloadNotRequested) {
 			query = query.Where("feed_items.download_id IS NULL")
 		} else {
-			query = query.Where("d.status = ?", filter.DownloadStatus)
+			query = query.
+				Joins("LEFT JOIN downloads d ON d.id = feed_items.download_id").
+				Where("d.status = ?", filter.DownloadStatus)
 		}
 	}
 	if search := strings.TrimSpace(filter.Search); search != "" {
