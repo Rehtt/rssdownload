@@ -228,15 +228,17 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 type settingsRequest struct {
-	Aria2URL            string `json:"aria2Url"`
-	Aria2Secret         string `json:"aria2Secret"`
-	ClearAria2Secret    bool   `json:"clearAria2Secret"`
-	ProxyURL            string `json:"proxyUrl"`
-	ProxyUsername       string `json:"proxyUsername"`
-	ProxyPassword       string `json:"proxyPassword"`
-	ClearProxyPassword  bool   `json:"clearProxyPassword"`
-	DefaultDownloadDir  string `json:"defaultDownloadDir"`
-	PollIntervalMinutes int    `json:"pollIntervalMinutes"`
+	Aria2URL            string   `json:"aria2Url"`
+	Aria2Secret         string   `json:"aria2Secret"`
+	ClearAria2Secret    bool     `json:"clearAria2Secret"`
+	SeedTimeMinutes     *float64 `json:"seedTimeMinutes"`
+	SeedRatio           *float64 `json:"seedRatio"`
+	ProxyURL            string   `json:"proxyUrl"`
+	ProxyUsername       string   `json:"proxyUsername"`
+	ProxyPassword       string   `json:"proxyPassword"`
+	ClearProxyPassword  bool     `json:"clearProxyPassword"`
+	DefaultDownloadDir  string   `json:"defaultDownloadDir"`
+	PollIntervalMinutes int      `json:"pollIntervalMinutes"`
 }
 
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
@@ -277,6 +279,8 @@ func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 	settings := domain.Settings{
 		Aria2URL:            strings.TrimSpace(request.Aria2URL),
 		Aria2Secret:         request.Aria2Secret,
+		SeedTimeMinutes:     request.SeedTimeMinutes,
+		SeedRatio:           request.SeedRatio,
 		ProxyURL:            request.ProxyURL,
 		ProxyUsername:       request.ProxyUsername,
 		ProxyPassword:       request.ProxyPassword,
@@ -658,6 +662,8 @@ func publicSettings(settings domain.Settings) map[string]any {
 		"aria2Url":            settings.Aria2URL,
 		"aria2Secret":         secret,
 		"hasAria2Secret":      settings.Aria2Secret != "",
+		"seedTimeMinutes":     settings.SeedTimeMinutes,
+		"seedRatio":           settings.SeedRatio,
 		"proxyUrl":            settings.ProxyURL,
 		"proxyUsername":       settings.ProxyUsername,
 		"proxyPassword":       proxyPassword,

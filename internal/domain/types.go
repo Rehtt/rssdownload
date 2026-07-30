@@ -26,6 +26,8 @@ const (
 type Settings struct {
 	Aria2URL            string    `json:"aria2Url"`
 	Aria2Secret         string    `json:"aria2Secret,omitempty"`
+	SeedTimeMinutes     *float64  `json:"seedTimeMinutes"`
+	SeedRatio           *float64  `json:"seedRatio"`
 	ProxyURL            string    `json:"proxyUrl"`
 	ProxyUsername       string    `json:"proxyUsername"`
 	ProxyPassword       string    `json:"proxyPassword,omitempty"`

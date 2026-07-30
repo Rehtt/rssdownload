@@ -117,6 +117,17 @@ func TestSubmitDownload(t *testing.T) {
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("read pending download: %#v, %v", pending, err)
 	}
+	settings, err := dataStore.Settings(ctx)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	seedTime := 120.5
+	seedRatio := 1.5
+	settings.SeedTimeMinutes = &seedTime
+	settings.SeedRatio = &seedRatio
+	if _, err := dataStore.UpdateSettings(ctx, settings); err != nil {
+		t.Fatalf("configure seeding: %v", err)
+	}
 	fake := &fakeAria{}
 	service := New(dataStore, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	service.ariaFactory = func(_, _ string) (AriaClient, error) { return fake, nil }
@@ -138,8 +149,13 @@ func TestSubmitDownload(t *testing.T) {
 	if updated.Status != domain.DownloadWaiting {
 		t.Fatalf("expected waiting download, got %s (%s)", updated.Status, updated.ErrorMessage)
 	}
-	if fake.directory != "/anime" || fake.gid != pending[0].Aria2GID {
-		t.Fatalf("unexpected aria2 submission: dir=%q gid=%q", fake.directory, fake.gid)
+	if fake.config.DownloadDir != "/anime" ||
+		fake.config.GID != pending[0].Aria2GID ||
+		fake.config.SeedTimeMinutes == nil ||
+		*fake.config.SeedTimeMinutes != seedTime ||
+		fake.config.SeedRatio == nil ||
+		*fake.config.SeedRatio != seedRatio {
+		t.Fatalf("unexpected aria2 submission: %#v", fake.config)
 	}
 }
 
@@ -207,18 +223,20 @@ func (f *sequenceFetcher) Fetch(context.Context, string, string, string) (feed.F
 }
 
 type fakeAria struct {
-	gid       string
-	directory string
+	config aria2.AddTorrentOptions
 }
 
 func (f *fakeAria) GetVersion(context.Context) (aria2.Version, error) {
 	return aria2.Version{Version: "1.37.0"}, nil
 }
 
-func (f *fakeAria) AddTorrent(_ context.Context, _ []byte, gid, directory string) (string, error) {
-	f.gid = gid
-	f.directory = directory
-	return gid, nil
+func (f *fakeAria) AddTorrent(
+	_ context.Context,
+	_ []byte,
+	config aria2.AddTorrentOptions,
+) (string, error) {
+	f.config = config
+	return config.GID, nil
 }
 
 func (f *fakeAria) TellStatus(context.Context, string) (aria2.Status, error) {

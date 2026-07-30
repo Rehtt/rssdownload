@@ -20,6 +20,8 @@ export interface Settings {
   aria2Url: string;
   aria2Secret: string;
   hasAria2Secret: boolean;
+  seedTimeMinutes: number | null;
+  seedRatio: number | null;
   proxyUrl: string;
   proxyUsername: string;
   proxyPassword: string;

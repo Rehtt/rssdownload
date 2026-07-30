@@ -52,10 +52,11 @@ export async function api<T>(
     }
     throw new ApiError(response.status, code, message);
   }
-  if (response.status === 204) {
+  const body = await response.text();
+  if (!body) {
     return undefined as T;
   }
-  return (await response.json()) as T;
+  return JSON.parse(body) as T;
 }
 
 export async function loadSession(): Promise<Session> {
@@ -74,4 +75,3 @@ export function queryString(values: Record<string, string | number | undefined>)
   const encoded = query.toString();
   return encoded ? `?${encoded}` : "";
 }
-

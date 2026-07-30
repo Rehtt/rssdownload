@@ -29,7 +29,11 @@ type FeedFetcher interface {
 
 type AriaClient interface {
 	GetVersion(ctx context.Context) (aria2.Version, error)
-	AddTorrent(ctx context.Context, torrent []byte, gid, downloadDir string) (string, error)
+	AddTorrent(
+		ctx context.Context,
+		torrent []byte,
+		config aria2.AddTorrentOptions,
+	) (string, error)
 	TellStatus(ctx context.Context, gid string) (aria2.Status, error)
 	Pause(ctx context.Context, gid string) error
 	Unpause(ctx context.Context, gid string) error
@@ -334,7 +338,12 @@ func (s *Service) submitDownload(ctx context.Context, download domain.Download) 
 	if directory == "" {
 		directory = strings.TrimSpace(settings.DefaultDownloadDir)
 	}
-	gid, err := client.AddTorrent(ctx, torrent, download.Aria2GID, directory)
+	gid, err := client.AddTorrent(ctx, torrent, aria2.AddTorrentOptions{
+		GID:             download.Aria2GID,
+		DownloadDir:     directory,
+		SeedTimeMinutes: settings.SeedTimeMinutes,
+		SeedRatio:       settings.SeedRatio,
+	})
 	if err != nil {
 		permanent = isPermanentRPCError(err)
 		s.retryDownload(ctx, download, err, permanent)

@@ -29,6 +29,8 @@ type SettingsModel struct {
 	ID                  int64     `gorm:"column:id;primaryKey;autoIncrement:false"`
 	Aria2URL            string    `gorm:"column:aria2_url;not null"`
 	Aria2Secret         string    `gorm:"column:aria2_secret;not null"`
+	SeedTimeMinutes     *float64  `gorm:"column:seed_time_minutes"`
+	SeedRatio           *float64  `gorm:"column:seed_ratio"`
 	ProxyURL            string    `gorm:"column:proxy_url;not null;default:''"`
 	ProxyUsername       string    `gorm:"column:proxy_username;not null;default:''"`
 	ProxyPassword       string    `gorm:"column:proxy_password;not null;default:''"`

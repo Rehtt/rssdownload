@@ -107,7 +107,7 @@ func TestHealthIsPublic(t *testing.T) {
 	}
 }
 
-func TestProxySettingsPasswordIsWriteOnly(t *testing.T) {
+func TestSettingsSensitiveFieldsAndSeedingOptions(t *testing.T) {
 	t.Parallel()
 	handler := newTestServer(t)
 
@@ -132,6 +132,8 @@ func TestProxySettingsPasswordIsWriteOnly(t *testing.T) {
 
 	updateBody := bytes.NewBufferString(`{
 		"aria2Url":"http://127.0.0.1:6800/jsonrpc",
+		"seedTimeMinutes":120.5,
+		"seedRatio":1.5,
 		"proxyUrl":"socks5://proxy.example:1080",
 		"proxyUsername":"proxy-user",
 		"proxyPassword":"proxy-pass",
@@ -151,10 +153,12 @@ func TestProxySettingsPasswordIsWriteOnly(t *testing.T) {
 		t.Fatal("settings response leaked the proxy password")
 	}
 	var updated struct {
-		ProxyURL         string `json:"proxyUrl"`
-		ProxyUsername    string `json:"proxyUsername"`
-		ProxyPassword    string `json:"proxyPassword"`
-		HasProxyPassword bool   `json:"hasProxyPassword"`
+		ProxyURL         string  `json:"proxyUrl"`
+		ProxyUsername    string  `json:"proxyUsername"`
+		ProxyPassword    string  `json:"proxyPassword"`
+		HasProxyPassword bool    `json:"hasProxyPassword"`
+		SeedTimeMinutes  float64 `json:"seedTimeMinutes"`
+		SeedRatio        float64 `json:"seedRatio"`
 	}
 	if err := json.NewDecoder(updateResponse.Body).Decode(&updated); err != nil {
 		t.Fatalf("decode settings: %v", err)
@@ -162,12 +166,16 @@ func TestProxySettingsPasswordIsWriteOnly(t *testing.T) {
 	if updated.ProxyURL != "socks5://proxy.example:1080" ||
 		updated.ProxyUsername != "proxy-user" ||
 		updated.ProxyPassword != "••••" ||
-		!updated.HasProxyPassword {
+		!updated.HasProxyPassword ||
+		updated.SeedTimeMinutes != 120.5 ||
+		updated.SeedRatio != 1.5 {
 		t.Fatalf("unexpected public proxy settings: %#v", updated)
 	}
 
 	preserveBody := bytes.NewBufferString(`{
 		"aria2Url":"http://127.0.0.1:6800/jsonrpc",
+		"seedTimeMinutes":120.5,
+		"seedRatio":1.5,
 		"proxyUrl":"socks5://proxy.example:1080",
 		"proxyUsername":"proxy-user",
 		"proxyPassword":"",
@@ -186,9 +194,33 @@ func TestProxySettingsPasswordIsWriteOnly(t *testing.T) {
 	if !bytes.Contains(preserveResponse.Body.Bytes(), []byte(`"hasProxyPassword":true`)) {
 		t.Fatalf("blank password did not preserve the stored value: %s", preserveResponse.Body.String())
 	}
+
+	clearBody := bytes.NewBufferString(`{
+		"aria2Url":"http://127.0.0.1:6800/jsonrpc",
+		"seedTimeMinutes":null,
+		"seedRatio":null,
+		"proxyUrl":"socks5://proxy.example:1080",
+		"proxyUsername":"proxy-user",
+		"proxyPassword":"",
+		"defaultDownloadDir":"",
+		"pollIntervalMinutes":10
+	}`)
+	clearRequest := httptest.NewRequest(http.MethodPut, "/api/v1/settings", clearBody)
+	clearRequest.Header.Set("Content-Type", "application/json")
+	clearRequest.Header.Set("X-CSRF-Token", loginResult.CSRFToken)
+	clearRequest.AddCookie(cookies[0])
+	clearResponse := httptest.NewRecorder()
+	handler.ServeHTTP(clearResponse, clearRequest)
+	if clearResponse.Code != http.StatusOK {
+		t.Fatalf("clear status = %d, body=%s", clearResponse.Code, clearResponse.Body.String())
+	}
+	if !bytes.Contains(clearResponse.Body.Bytes(), []byte(`"seedTimeMinutes":null`)) ||
+		!bytes.Contains(clearResponse.Body.Bytes(), []byte(`"seedRatio":null`)) {
+		t.Fatalf("blank seed options did not restore inheritance: %s", clearResponse.Body.String())
+	}
 }
 
-func TestProxySettingsRejectInvalidURL(t *testing.T) {
+func TestSettingsRejectInvalidValues(t *testing.T) {
 	t.Parallel()
 	handler := newTestServer(t)
 
@@ -226,5 +258,27 @@ func TestProxySettingsRejectInvalidURL(t *testing.T) {
 	if updateResponse.Code != http.StatusBadRequest ||
 		!bytes.Contains(updateResponse.Body.Bytes(), []byte(`"code":"invalid_proxy"`)) {
 		t.Fatalf("invalid proxy status = %d, body=%s", updateResponse.Code, updateResponse.Body.String())
+	}
+
+	negativeSeedBody := bytes.NewBufferString(`{
+		"aria2Url":"http://127.0.0.1:6800/jsonrpc",
+		"seedTimeMinutes":-0.1,
+		"proxyUrl":"",
+		"defaultDownloadDir":"",
+		"pollIntervalMinutes":10
+	}`)
+	negativeSeedRequest := httptest.NewRequest(http.MethodPut, "/api/v1/settings", negativeSeedBody)
+	negativeSeedRequest.Header.Set("Content-Type", "application/json")
+	negativeSeedRequest.Header.Set("X-CSRF-Token", loginResult.CSRFToken)
+	negativeSeedRequest.AddCookie(cookies[0])
+	negativeSeedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(negativeSeedResponse, negativeSeedRequest)
+	if negativeSeedResponse.Code != http.StatusBadRequest ||
+		!bytes.Contains(negativeSeedResponse.Body.Bytes(), []byte(`"code":"invalid_settings"`)) {
+		t.Fatalf(
+			"negative seed time status = %d, body=%s",
+			negativeSeedResponse.Code,
+			negativeSeedResponse.Body.String(),
+		)
 	}
 }

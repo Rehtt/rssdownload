@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -41,6 +42,13 @@ type Status struct {
 	ErrorCode       string `json:"errorCode"`
 	ErrorMessage    string `json:"errorMessage"`
 	Dir             string `json:"dir"`
+}
+
+type AddTorrentOptions struct {
+	GID             string
+	DownloadDir     string
+	SeedTimeMinutes *float64
+	SeedRatio       *float64
 }
 
 type RPCError struct {
@@ -91,11 +99,23 @@ func (c *Client) GetVersion(ctx context.Context) (Version, error) {
 func (c *Client) AddTorrent(
 	ctx context.Context,
 	torrent []byte,
-	gid, downloadDir string,
+	config AddTorrentOptions,
 ) (string, error) {
-	options := map[string]string{"gid": gid}
-	if strings.TrimSpace(downloadDir) != "" {
-		options["dir"] = strings.TrimSpace(downloadDir)
+	options := map[string]string{"gid": config.GID}
+	if strings.TrimSpace(config.DownloadDir) != "" {
+		options["dir"] = strings.TrimSpace(config.DownloadDir)
+	}
+	if config.SeedTimeMinutes != nil {
+		if !finiteNonNegative(*config.SeedTimeMinutes) {
+			return "", errors.New("seed time must be a finite non-negative number")
+		}
+		options["seed-time"] = strconv.FormatFloat(*config.SeedTimeMinutes, 'f', -1, 64)
+	}
+	if config.SeedRatio != nil {
+		if !finiteNonNegative(*config.SeedRatio) {
+			return "", errors.New("seed ratio must be a finite non-negative number")
+		}
+		options["seed-ratio"] = strconv.FormatFloat(*config.SeedRatio, 'f', -1, 64)
 	}
 	params := []any{
 		base64.StdEncoding.EncodeToString(torrent),
@@ -107,6 +127,10 @@ func (c *Client) AddTorrent(
 		return "", err
 	}
 	return result, nil
+}
+
+func finiteNonNegative(value float64) bool {
+	return value >= 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 func (c *Client) TellStatus(ctx context.Context, gid string) (Status, error) {

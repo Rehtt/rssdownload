@@ -226,12 +226,26 @@ func (s *Store) UpdateSettings(ctx context.Context, settings domain.Settings) (d
 	if settings.PollIntervalMinutes < 1 || settings.PollIntervalMinutes > 1440 {
 		return domain.Settings{}, errors.New("poll interval must be between 1 and 1440 minutes")
 	}
+	if settings.SeedTimeMinutes != nil &&
+		(*settings.SeedTimeMinutes < 0 ||
+			math.IsNaN(*settings.SeedTimeMinutes) ||
+			math.IsInf(*settings.SeedTimeMinutes, 0)) {
+		return domain.Settings{}, errors.New("seed time must be a finite non-negative number")
+	}
+	if settings.SeedRatio != nil &&
+		(*settings.SeedRatio < 0 ||
+			math.IsNaN(*settings.SeedRatio) ||
+			math.IsInf(*settings.SeedRatio, 0)) {
+		return domain.Settings{}, errors.New("seed ratio must be a finite non-negative number")
+	}
 	err := s.db.WithContext(ctx).
 		Model(&database.SettingsModel{}).
 		Where("id = 1").
 		Updates(map[string]any{
 			"aria2_url":             settings.Aria2URL,
 			"aria2_secret":          settings.Aria2Secret,
+			"seed_time_minutes":     settings.SeedTimeMinutes,
+			"seed_ratio":            settings.SeedRatio,
 			"proxy_url":             settings.ProxyURL,
 			"proxy_username":        settings.ProxyUsername,
 			"proxy_password":        settings.ProxyPassword,
@@ -902,6 +916,8 @@ func settingsFromModel(model database.SettingsModel) domain.Settings {
 	return domain.Settings{
 		Aria2URL:            model.Aria2URL,
 		Aria2Secret:         model.Aria2Secret,
+		SeedTimeMinutes:     model.SeedTimeMinutes,
+		SeedRatio:           model.SeedRatio,
 		ProxyURL:            model.ProxyURL,
 		ProxyUsername:       model.ProxyUsername,
 		ProxyPassword:       model.ProxyPassword,

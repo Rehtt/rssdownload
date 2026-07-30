@@ -30,6 +30,8 @@ interface SettingsForm {
   aria2Url: string;
   aria2Secret: string;
   clearAria2Secret: boolean;
+  seedTimeMinutes: number | null;
+  seedRatio: number | null;
   proxyUrl: string;
   proxyUsername: string;
   proxyPassword: string;
@@ -88,6 +90,8 @@ export function SettingsPage() {
         aria2Url: settings.data.aria2Url,
         aria2Secret: "",
         clearAria2Secret: false,
+        seedTimeMinutes: settings.data.seedTimeMinutes,
+        seedRatio: settings.data.seedRatio,
         proxyUrl: settings.data.proxyUrl,
         proxyUsername: settings.data.proxyUsername,
         proxyPassword: "",
@@ -102,7 +106,11 @@ export function SettingsPage() {
     mutationFn: (values: SettingsForm) =>
       api<Settings>("/settings", {
         method: "PUT",
-        body: JSON.stringify(values),
+        body: JSON.stringify({
+          ...values,
+          seedTimeMinutes: values.seedTimeMinutes ?? null,
+          seedRatio: values.seedRatio ?? null,
+        }),
       }),
     onSuccess: async () => {
       message.success("设置已保存");
@@ -147,7 +155,7 @@ export function SettingsPage() {
     <>
       <PageHeader
         title="系统设置"
-        description="配置 aria2 JSON-RPC、网络代理、下载目录、轮询频率和管理员密码。"
+        description="配置 aria2 JSON-RPC、做种策略、网络代理、下载目录、轮询频率和管理员密码。"
       />
       {settings.error && (
         <Alert
@@ -274,6 +282,39 @@ export function SettingsPage() {
               >
                 <Input placeholder="/downloads/anime" />
               </Form.Item>
+              <Row gutter={16}>
+                <Col xs={24} md={12}>
+                  <Form.Item
+                    name="seedTimeMinutes"
+                    label="做种时间（分钟）"
+                    extra="留空时沿用 aria2 配置；0 表示下载完成后不做种。"
+                  >
+                    <InputNumber
+                      min={0}
+                      step={0.1}
+                      placeholder="由 aria2 决定"
+                      style={{ width: "100%" }}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={12}>
+                  <Form.Item
+                    name="seedRatio"
+                    label="做种比例（分享率）"
+                    extra="留空时沿用 aria2 配置；0 表示不按分享率停止，建议不低于 1。"
+                  >
+                    <InputNumber
+                      min={0}
+                      step={0.1}
+                      placeholder="由 aria2 决定"
+                      style={{ width: "100%" }}
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Typography.Paragraph type="secondary">
+                同时设置时，达到任一条件即停止做种；仅影响之后提交给 aria2 的任务。
+              </Typography.Paragraph>
               <Form.Item
                 name="pollIntervalMinutes"
                 label="RSS 轮询间隔"

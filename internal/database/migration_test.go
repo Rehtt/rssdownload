@@ -226,6 +226,8 @@ func TestOpenMigratesLegacyDatabaseWithoutLosingData(t *testing.T) {
 	}
 	if settings.Aria2URL != "http://legacy-aria2:6800/jsonrpc" ||
 		settings.Aria2Secret != "legacy-secret" ||
+		settings.SeedTimeMinutes != nil ||
+		settings.SeedRatio != nil ||
 		settings.ProxyURL != "" ||
 		settings.ProxyUsername != "" ||
 		settings.ProxyPassword != "" ||

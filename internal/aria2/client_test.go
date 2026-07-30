@@ -36,11 +36,17 @@ func TestClientAddTorrentAndAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
+	seedTime := 120.5
+	seedRatio := 1.5
 	gid, err := client.AddTorrent(
 		context.Background(),
 		[]byte("d4:infode"),
-		"0123456789abcdef",
-		"/downloads/anime",
+		AddTorrentOptions{
+			GID:             "0123456789abcdef",
+			DownloadDir:     "/downloads/anime",
+			SeedTimeMinutes: &seedTime,
+			SeedRatio:       &seedRatio,
+		},
 	)
 	if err != nil {
 		t.Fatalf("add torrent: %v", err)
@@ -61,8 +67,53 @@ func TestClientAddTorrentAndAuthentication(t *testing.T) {
 	if !ok {
 		t.Fatalf("options have unexpected shape: %#v", request.Params[3])
 	}
-	if options["gid"] != "0123456789abcdef" || options["dir"] != "/downloads/anime" {
+	if options["gid"] != "0123456789abcdef" ||
+		options["dir"] != "/downloads/anime" ||
+		options["seed-time"] != "120.5" ||
+		options["seed-ratio"] != "1.5" {
 		t.Fatalf("unexpected options: %#v", options)
+	}
+}
+
+func TestClientAddTorrentOmitsUnsetSeedOptions(t *testing.T) {
+	t.Parallel()
+	var request rpcRequest
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		body, _ := json.Marshal(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"result":  "0123456789abcdef",
+		})
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewReader(body)),
+		}, nil
+	})}
+	client, err := NewWithHTTP("http://aria2.test/jsonrpc", "", httpClient)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if _, err := client.AddTorrent(
+		context.Background(),
+		[]byte("d4:infode"),
+		AddTorrentOptions{GID: "0123456789abcdef"},
+	); err != nil {
+		t.Fatalf("add torrent: %v", err)
+	}
+	options, ok := request.Params[2].(map[string]any)
+	if !ok {
+		t.Fatalf("options have unexpected shape: %#v", request.Params[2])
+	}
+	if _, exists := options["seed-time"]; exists {
+		t.Fatalf("unset seed time was sent: %#v", options)
+	}
+	if _, exists := options["seed-ratio"]; exists {
+		t.Fatalf("unset seed ratio was sent: %#v", options)
 	}
 }
 

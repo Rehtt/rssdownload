@@ -95,7 +95,7 @@ func TestInitialBaselineAndSubsequentQueue(t *testing.T) {
 	}
 }
 
-func TestSettingsPersistProxyConfiguration(t *testing.T) {
+func TestSettingsPersistDownloadConfiguration(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -107,6 +107,10 @@ func TestSettingsPersistProxyConfiguration(t *testing.T) {
 	current.ProxyURL = "socks5://proxy.example:1080"
 	current.ProxyUsername = "proxy-user"
 	current.ProxyPassword = "proxy-pass"
+	seedTime := 120.5
+	seedRatio := 1.5
+	current.SeedTimeMinutes = &seedTime
+	current.SeedRatio = &seedRatio
 
 	updated, err := dataStore.UpdateSettings(ctx, current)
 	if err != nil {
@@ -114,8 +118,23 @@ func TestSettingsPersistProxyConfiguration(t *testing.T) {
 	}
 	if updated.ProxyURL != current.ProxyURL ||
 		updated.ProxyUsername != current.ProxyUsername ||
-		updated.ProxyPassword != current.ProxyPassword {
-		t.Fatalf("proxy settings were not persisted: %#v", updated)
+		updated.ProxyPassword != current.ProxyPassword ||
+		updated.SeedTimeMinutes == nil ||
+		*updated.SeedTimeMinutes != seedTime ||
+		updated.SeedRatio == nil ||
+		*updated.SeedRatio != seedRatio {
+		t.Fatalf("download settings were not persisted: %#v", updated)
+	}
+
+	negative := -0.1
+	current.SeedTimeMinutes = &negative
+	if _, err := dataStore.UpdateSettings(ctx, current); err == nil {
+		t.Fatal("negative seed time was accepted")
+	}
+	current.SeedTimeMinutes = &seedTime
+	current.SeedRatio = &negative
+	if _, err := dataStore.UpdateSettings(ctx, current); err == nil {
+		t.Fatal("negative seed ratio was accepted")
 	}
 }
 
