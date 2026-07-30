@@ -161,6 +161,13 @@ func (c *Client) Unpause(ctx context.Context, gid string) error {
 	return c.call(ctx, "aria2.unpause", []any{gid}, &result)
 }
 
+// RemoveDownloadResult drops a stopped download (complete/error/removed) from
+// aria2's session so the same GID can be submitted again.
+func (c *Client) RemoveDownloadResult(ctx context.Context, gid string) error {
+	var result string
+	return c.call(ctx, "aria2.removeDownloadResult", []any{gid}, &result)
+}
+
 func (c *Client) call(ctx context.Context, method string, params []any, result any) error {
 	if params == nil {
 		params = []any{}
@@ -261,6 +268,21 @@ func IsGIDNotFound(err error) bool {
 	}
 	return strings.Contains(message, "gid") &&
 		(strings.Contains(message, "not found") || strings.Contains(message, "not exist"))
+}
+
+// IsResultAlreadyRemoved reports whether aria2.removeDownloadResult failed
+// only because the download result no longer exists. aria2 responds with
+// "Could not remove download result of GID#xxxx" in that case (see
+// RemoveDownloadResultRpcMethod in RpcMethodImpl.cc).
+func IsResultAlreadyRemoved(err error) bool {
+	if IsGIDNotFound(err) {
+		return true
+	}
+	var rpcErr *RPCError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	return strings.Contains(strings.ToLower(rpcErr.Message), "could not remove download result")
 }
 
 type rpcRequest struct {

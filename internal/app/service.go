@@ -37,6 +37,7 @@ type AriaClient interface {
 	TellStatus(ctx context.Context, gid string) (aria2.Status, error)
 	Pause(ctx context.Context, gid string) error
 	Unpause(ctx context.Context, gid string) error
+	RemoveDownloadResult(ctx context.Context, gid string) error
 }
 
 type AriaFactory func(endpoint, secret string) (AriaClient, error)
@@ -308,15 +309,27 @@ func (s *Service) submitDownload(ctx context.Context, download domain.Download) 
 	}
 	current, err := client.TellStatus(ctx, download.Aria2GID)
 	if err == nil {
-		status, total, completed, message := aria2.MapStatus(current)
-		if updateErr := s.store.UpdateDownloadStatus(
-			ctx, download.ID, status, total, completed, message,
-		); updateErr != nil {
-			s.logger.Error("adopt existing aria2 download", "download_id", download.ID, "error", updateErr)
+		if current.Status == "error" || current.Status == "removed" {
+			// aria2 keeps stopped results in its session; adopting them would
+			// bounce a re-queued download straight back to error/unknown and
+			// the retained GID would also block re-adding the torrent. Purge
+			// the stale result and fall through to a fresh submission. A
+			// result that vanished in the meantime counts as already purged.
+			if removeErr := client.RemoveDownloadResult(ctx, download.Aria2GID); removeErr != nil &&
+				!aria2.IsResultAlreadyRemoved(removeErr) {
+				s.retryDownload(ctx, download, removeErr, false)
+				return
+			}
+		} else {
+			status, total, completed, message := aria2.MapStatus(current)
+			if updateErr := s.store.UpdateDownloadStatus(
+				ctx, download.ID, status, total, completed, message,
+			); updateErr != nil {
+				s.logger.Error("adopt existing aria2 download", "download_id", download.ID, "error", updateErr)
+			}
+			return
 		}
-		return
-	}
-	if !aria2.IsGIDNotFound(err) {
+	} else if !aria2.IsGIDNotFound(err) {
 		s.retryDownload(ctx, download, err, false)
 		return
 	}

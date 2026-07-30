@@ -246,6 +246,8 @@ func (f *fakeAria) TellStatus(context.Context, string) (aria2.Status, error) {
 func (f *fakeAria) Pause(context.Context, string) error   { return nil }
 func (f *fakeAria) Unpause(context.Context, string) error { return nil }
 
+func (f *fakeAria) RemoveDownloadResult(context.Context, string) error { return nil }
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
