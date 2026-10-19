@@ -76,6 +76,18 @@ func (s *Store) AdminByUsername(ctx context.Context, username string) (Admin, er
 	return Admin{ID: model.ID, Username: model.Username, PasswordHash: model.PasswordHash}, nil
 }
 
+func (s *Store) Admin(ctx context.Context) (Admin, error) {
+	var model database.AdminModel
+	err := s.db.WithContext(ctx).First(&model, 1).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return Admin{}, ErrNotFound
+	}
+	if err != nil {
+		return Admin{}, fmt.Errorf("find admin: %w", err)
+	}
+	return Admin{ID: model.ID, Username: model.Username, PasswordHash: model.PasswordHash}, nil
+}
+
 func (s *Store) UpdateAdminPassword(ctx context.Context, username, passwordHash string) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&database.AdminModel{}).

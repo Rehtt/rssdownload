@@ -84,6 +84,7 @@ func run(args []string) error {
 		logger,
 		cfg.CookieSecure,
 		cfg.TrustedProxies,
+		httpapi.WithOIDC(auth.NewOIDC(cfg.OIDC)),
 	)
 	httpServer := &http.Server{
 		Addr:              cfg.Listen,

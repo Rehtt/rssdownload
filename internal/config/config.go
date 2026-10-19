@@ -22,6 +22,7 @@ type Config struct {
 	AdminUsername  string
 	AdminPassword  string
 	TrustedProxies []netip.Prefix
+	OIDC           OIDCConfig
 }
 
 func Load(args []string) (Config, error) {
@@ -31,6 +32,12 @@ func Load(args []string) (Config, error) {
 		CookieSecure:  envBool("RSSDOWNLOAD_COOKIE_SECURE", false),
 		AdminUsername: envOr("RSSDOWNLOAD_ADMIN_USERNAME", "admin"),
 		AdminPassword: os.Getenv("RSSDOWNLOAD_ADMIN_PASSWORD"),
+		OIDC: OIDCConfig{
+			IssuerURL:    os.Getenv("RSSDOWNLOAD_OIDC_ISSUER_URL"),
+			ClientID:     os.Getenv("RSSDOWNLOAD_OIDC_CLIENT_ID"),
+			ClientSecret: os.Getenv("RSSDOWNLOAD_OIDC_CLIENT_SECRET"),
+			RedirectURL:  os.Getenv("RSSDOWNLOAD_OIDC_REDIRECT_URL"),
+		},
 	}
 	trustedProxies := os.Getenv("RSSDOWNLOAD_TRUSTED_PROXIES")
 
@@ -64,6 +71,9 @@ func Load(args []string) (Config, error) {
 		return Config{}, err
 	}
 	cfg.TrustedProxies = parsed
+	if err := cfg.OIDC.validate(os.Getenv("RSSDOWNLOAD_OIDC_ALLOWED_EMAILS")); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 

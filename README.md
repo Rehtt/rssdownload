@@ -158,9 +158,50 @@ RSSDOWNLOAD_ADMIN_PASSWORD='change-me-now' ./dist/rssdownload
 | `RSSDOWNLOAD_DATA_DIR` | `./data` | 配置、订阅和历史记录的数据目录 |
 | `RSSDOWNLOAD_COOKIE_SECURE` | `false` | 使用 HTTPS 时设为 `true` |
 | `RSSDOWNLOAD_TRUSTED_PROXIES` | 无 | 受信任的反向代理 IP 或 CIDR，逗号分隔 |
+| `RSSDOWNLOAD_OIDC_ISSUER_URL` | 无 | OIDC 服务的 issuer 地址，通过 Discovery 获取端点 |
+| `RSSDOWNLOAD_OIDC_CLIENT_ID` | 无 | OIDC 客户端 ID |
+| `RSSDOWNLOAD_OIDC_CLIENT_SECRET` | 无 | OIDC 客户端密钥 |
+| `RSSDOWNLOAD_OIDC_REDIRECT_URL` | 无 | 完整回调地址，路径为 `/api/v1/auth/oidc/callback` |
+| `RSSDOWNLOAD_OIDC_ALLOWED_EMAILS` | 无 | 允许登录的完整邮箱，逗号分隔 |
 
 监听地址等选项也可以通过 `--listen`、`--data-dir`、`--trusted-proxies` 参数
 指定，命令行参数优先于环境变量。
+
+### OIDC 登录
+
+保留密码登录的同时，可以接入一个支持 Discovery、授权码流程和 PKCE S256 的
+OIDC 身份服务。在身份服务中注册一个 Web / confidential 客户端，注册精确回调
+地址（不使用通配符），并允许 `openid email` scope。例如在 `.env` 中设置：
+
+```dotenv
+RSSDOWNLOAD_OIDC_ISSUER_URL=https://id.example.com
+RSSDOWNLOAD_OIDC_CLIENT_ID=rssdownload
+RSSDOWNLOAD_OIDC_CLIENT_SECRET=replace-with-client-secret
+RSSDOWNLOAD_OIDC_REDIRECT_URL=https://rss.example.com/api/v1/auth/oidc/callback
+RSSDOWNLOAD_OIDC_ALLOWED_EMAILS=alice@example.com,bob@example.com
+RSSDOWNLOAD_COOKIE_SECURE=true
+# 按实际代理地址填写，避免信任整个公网或不必要的内网范围。
+RSSDOWNLOAD_TRUSTED_PROXIES=127.0.0.1,::1
+```
+
+使用 Compose 时修改后执行 `docker compose up -d`；从源码运行时需将这些变量
+导出到进程环境。五项 OIDC 配置全部为空时禁用；部分配置、空白名单或无效地址会
+使启动报错。issuer 和回调必须为 HTTPS，本机开发允许 `http://localhost` 或
+回环 IP。回调应指向浏览器访问的地址；使用前端开发服务时可注册
+`http://127.0.0.1:5173/api/v1/auth/oidc/callback`，由 Vite 代理回后端。
+
+身份服务必须在 ID Token 中返回 `email` 和布尔值 `email_verified=true`；缺少
+邮箱声明时会查询 UserInfo，并要求其 `sub` 与 ID Token 一致。邮箱必须命中
+白名单，白名单会去除每项首尾空格并忽略大小写，不接受域名或通配符。
+
+登录页会自动显示“OIDC 登录”。登录请求有效期为 10 分钟，只能使用一次，服务
+重启后需要重新发起。身份服务暂时不可用时仍可使用密码登录。通过 OIDC 登录的
+用户都映射到现有管理员，拥有全部管理权限，共享相同订阅、下载和设置，不自动
+创建账号。首次启动仍需设置本地管理员密码。
+
+会话与密码登录相同，有效期为七天；退出仅注销本应用，不联动身份服务退出。
+修改白名单并重启只影响新登录，已有会话仍沿用原有效期。需要统一撤销时，可使用
+下方的管理员密码重置命令。
 
 ### 忘记管理员密码
 

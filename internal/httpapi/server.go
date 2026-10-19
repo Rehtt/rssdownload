@@ -34,6 +34,7 @@ const (
 type Server struct {
 	store          *store.Store
 	auth           *auth.Service
+	oidc           *auth.OIDCService
 	app            *app.Service
 	logger         *slog.Logger
 	cookieSecure   bool
@@ -43,6 +44,12 @@ type Server struct {
 }
 
 type contextKey string
+
+type Option func(*Server)
+
+func WithOIDC(service *auth.OIDCService) Option {
+	return func(s *Server) { s.oidc = service }
+}
 
 const (
 	sessionContextKey contextKey = "session"
@@ -56,6 +63,7 @@ func New(
 	logger *slog.Logger,
 	cookieSecure bool,
 	trustedProxies []netip.Prefix,
+	options ...Option,
 ) *Server {
 	if logger == nil {
 		logger = slog.Default()
@@ -68,6 +76,9 @@ func New(
 		cookieSecure:   cookieSecure,
 		trustedProxies: trustedProxies,
 		limiter:        newLoginLimiter(),
+	}
+	for _, option := range options {
+		option(server)
 	}
 	server.handler = server.routes()
 	return server
@@ -83,6 +94,9 @@ func (s *Server) routes() http.Handler {
 
 	api.HandleFunc("GET /api/v1/health", s.health)
 	api.HandleFunc("POST /api/v1/auth/login", s.login)
+	api.HandleFunc("GET /api/v1/auth/methods", s.authMethods)
+	api.HandleFunc("GET /api/v1/auth/oidc/login", s.oidcLogin)
+	api.HandleFunc("GET /api/v1/auth/oidc/callback", s.oidcCallback)
 
 	protected := http.NewServeMux()
 	protected.HandleFunc("GET /api/v1/auth/session", s.session)
@@ -145,14 +159,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.limiter.Success(ip)
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
-		Value:    result.Token,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   s.cookieSecure,
-		SameSite: http.SameSiteStrictMode,
-	})
+	s.setSessionCookie(w, result.Token)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"username":  result.Session.Username,

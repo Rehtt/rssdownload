@@ -16,7 +16,7 @@ import (
 	"github.com/Rehtt/rssdownload/internal/store"
 )
 
-func newTestServer(t *testing.T) http.Handler {
+func newTestServer(t *testing.T, options ...Option) http.Handler {
 	t.Helper()
 	db, _, err := database.Open(context.Background(), t.TempDir())
 	if err != nil {
@@ -30,7 +30,7 @@ func newTestServer(t *testing.T) http.Handler {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	appService := app.New(dataStore, logger)
-	return New(dataStore, authService, appService, logger, false, nil).Handler()
+	return New(dataStore, authService, appService, logger, false, nil, options...).Handler()
 }
 
 func TestAuthenticationAndCSRF(t *testing.T) {

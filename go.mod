@@ -3,8 +3,11 @@ module github.com/Rehtt/rssdownload
 go 1.26.4
 
 require (
+	github.com/coreos/go-oidc/v3 v3.21.0
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/libtnb/sqlite v1.2.1
 	golang.org/x/crypto v0.54.0
+	golang.org/x/oauth2 v0.37.0
 	gorm.io/gorm v1.31.2
 )
 

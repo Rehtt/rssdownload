@@ -1,6 +1,7 @@
 import { LockOutlined, RadarChartOutlined, UserOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, Form, Input, Typography } from "antd";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { api } from "../api";
 import { useAuth } from "../auth";
 
 interface LoginValues {
@@ -8,10 +9,39 @@ interface LoginValues {
   password: string;
 }
 
+const oidcErrors: Record<string, string> = {
+  oidc_disabled: "OIDC 登录未启用，请使用密码登录",
+  oidc_rate_limited: "登录尝试过于频繁，请稍后再试",
+  oidc_invalid_state: "登录请求已失效，请重新发起 OIDC 登录",
+  oidc_access_denied: "仅允许邮箱白名单中的已验证账号登录",
+  oidc_unavailable: "身份服务暂时不可用，请稍后重试或使用密码登录",
+  oidc_failed: "OIDC 登录失败，请重试或使用密码登录",
+};
+
 export function LoginPage() {
   const { login } = useAuth();
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => {
+    const code = new URLSearchParams(window.location.search).get("oidc_error");
+    return code
+      ? Object.hasOwn(oidcErrors, code) ? oidcErrors[code] : oidcErrors.oidc_failed
+      : "";
+  });
   const [submitting, setSubmitting] = useState(false);
+  const [methods, setMethods] = useState({ password: true, oidc: false });
+
+  useEffect(() => {
+    let active = true;
+    api<typeof methods>("/auth/methods")
+      .then((result) => {
+        if (active) setMethods(result);
+      })
+      .catch(() => {
+        // Keep password login available if loading methods fails.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const submit = async (values: LoginValues) => {
     setSubmitting(true);
@@ -51,40 +81,47 @@ export function LoginPage() {
           </div>
         </div>
         {error && <Alert type="error" showIcon message={error} />}
-        <Form<LoginValues>
-          layout="vertical"
-          requiredMark={false}
-          initialValues={{ username: "admin" }}
-          onFinish={(values) => void submit(values)}
-        >
-          <Form.Item
-            name="username"
-            label="管理员账号"
-            rules={[{ required: true, message: "请输入管理员账号" }]}
+        {methods.password && (
+          <Form<LoginValues>
+            layout="vertical"
+            requiredMark={false}
+            initialValues={{ username: "admin" }}
+            onFinish={(values) => void submit(values)}
           >
-            <Input size="large" prefix={<UserOutlined />} autoComplete="username" />
-          </Form.Item>
-          <Form.Item
-            name="password"
-            label="密码"
-            rules={[{ required: true, message: "请输入密码" }]}
-          >
-            <Input.Password
+            <Form.Item
+              name="username"
+              label="管理员账号"
+              rules={[{ required: true, message: "请输入管理员账号" }]}
+            >
+              <Input size="large" prefix={<UserOutlined />} autoComplete="username" />
+            </Form.Item>
+            <Form.Item
+              name="password"
+              label="密码"
+              rules={[{ required: true, message: "请输入密码" }]}
+            >
+              <Input.Password
+                size="large"
+                prefix={<LockOutlined />}
+                autoComplete="current-password"
+              />
+            </Form.Item>
+            <Button
+              type="primary"
+              htmlType="submit"
               size="large"
-              prefix={<LockOutlined />}
-              autoComplete="current-password"
-            />
-          </Form.Item>
-          <Button
-            type="primary"
-            htmlType="submit"
-            size="large"
-            block
-            loading={submitting}
-          >
-            登录
+              block
+              loading={submitting}
+            >
+              登录
+            </Button>
+          </Form>
+        )}
+        {methods.oidc && (
+          <Button size="large" block href="/api/v1/auth/oidc/login">
+            OIDC 登录
           </Button>
-        </Form>
+        )}
         <Typography.Text type="secondary" className="login-hint">
           管理员由首次启动时的环境变量创建
         </Typography.Text>

@@ -83,6 +83,19 @@ func (s *Service) Login(ctx context.Context, username, password string) (LoginRe
 	if !VerifyPassword(admin.PasswordHash, password) {
 		return LoginResult{}, ErrInvalidCredentials
 	}
+	return s.createSession(ctx, admin)
+}
+
+// LoginOIDC maps an already verified OIDC identity to the existing singleton admin.
+func (s *Service) LoginOIDC(ctx context.Context) (LoginResult, error) {
+	admin, err := s.store.Admin(ctx)
+	if err != nil {
+		return LoginResult{}, err
+	}
+	return s.createSession(ctx, admin)
+}
+
+func (s *Service) createSession(ctx context.Context, admin store.Admin) (LoginResult, error) {
 	token, err := randomToken(32)
 	if err != nil {
 		return LoginResult{}, err
